@@ -7,14 +7,14 @@ import cors from "cors";
 dotenv.config();
 
 const app = express();
-const port = 3000;
+const port = 4000;
 
 
 // ✅ Allow localhost:3000 frontend and production domain
 const allowedOrigins = [
-  "http://localhost:3000",   // Next.js dev
-  "http://127.0.0.1:3000",   // sometimes browser resolves this
-  "https://yourdomain.com",  // production domain
+  "http://localhost:3000",   
+  "http://127.0.0.1:3000",  
+  "https://yourdomain.com",  
 ];
 
 app.use(
