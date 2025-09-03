@@ -29,5 +29,5 @@ jobs:
             --name zapconnect-shopify-nodejs \
             --env-file /home/github-runner/zapconnect/zapconnect-shopify-nodejs-env/.env \
             --network zapconnect-db_default \
-            -p 3000:3000 \
+            -p 4000:3000 \
             zapconnect-shopify-nodejs
