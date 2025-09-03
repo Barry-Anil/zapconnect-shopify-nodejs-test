@@ -1,66 +1,23 @@
-// import express from "express";
-// import dotenv from "dotenv";
 
-// dotenv.config();
-// const app = express();
-// const port = 3000;
-
-// app.get("/orders", async (req, res) => {
-//   try {
-//     const query = `{
-//       orders(first: 100, sortKey: CREATED_AT, reverse: true) {
-//         edges {
-//           node {
-//             id
-//             name
-//             createdAt
-//             totalPriceSet {
-//               shopMoney {
-//                 amount
-//                 currencyCode
-//               }
-//             }
-//             customer {
-//               firstName
-//               lastName
-//               email
-//             }
-//           }
-//         }
-//       }
-//     }`;
-
-//     const response = await fetch(
-//       `https://${process.env.SHOPIFY_SHOP}/admin/api/2025-01/graphql.json`,
-//       {
-//         method: "POST",
-//         headers: {
-//           "Content-Type": "application/json",
-//           "X-Shopify-Access-Token": process.env.SHOPIFY_ACCESS_TOKEN,
-//         },
-//         body: JSON.stringify({ query }),
-//       }
-//     );
-
-//     const data = await response.json();
-//     res.json(data.data.orders.edges.map(edge => edge.node));
-//   } catch (err) {
-//     console.error(err);
-//     res.status(500).send("Error fetching orders");
-//   }
-// });
-
-// app.listen(port, () => {
-//   console.log(`🚀 Server running at http://localhost:${port}`);
-// });
 
 
 import express from "express";
 import dotenv from "dotenv";
+import cors from "cors";
 dotenv.config();
 
 const app = express();
 const port = 3000;
+
+// ✅ Enable CORS
+app.use(
+  cors({
+    origin: "*", // allow all origins (you can restrict to specific domains later)
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization", "filtercriteria"],
+    credentials: true, // if you need cookies/credentials
+  })
+);
 
 app.get("/orders", async (req, res) => {
   try {
