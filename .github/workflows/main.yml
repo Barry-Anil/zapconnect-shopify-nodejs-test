@@ -1,0 +1,33 @@
+name: Deploy Customer API to Self-Hosted Runner.
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux]
+    name: Build and Deploy Docker Container
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t zapconnect-shopify-nodejs .
+
+      - name: Stop existing container (if any)
+        run: |
+          docker stop zapconnect-shopify-nodejs || true
+          docker rm zapconnect-shopify-nodejs || true
+
+      - name: Run new container with .env
+        run: |
+          docker run -d \
+            --name zapconnect-shopify-nodejs \
+            --env-file /home/github-runner/zapconnect/zapconnect-shopify-nodejs-env/.env \
+            --network zapconnect-db_default \
+            -p 3000:3000 \
+            zapconnect-shopify-nodejs
