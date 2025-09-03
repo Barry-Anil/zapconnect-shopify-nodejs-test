@@ -1,6 +1,3 @@
-
-
-
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
@@ -9,45 +6,67 @@ dotenv.config();
 const app = express();
 const port = 4000;
 
-
-// ✅ Allow localhost:3000 frontend and production domain
+// ✅ More permissive CORS configuration for development
 const allowedOrigins = [
   "http://localhost:3000",   
-  "http://127.0.0.1:3000",  
-  "https://apinode.zapconnecthub.com",
+  "http://127.0.0.1:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3001",
+  "https://yourdomain.com",
+  // Add your actual frontend URL here
+  "https://apinode.zapconnecthub.com"
 ];
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin) {
-        // SSR or Postman requests
-        return callback(null, true);
-      }
-
+      // Allow requests with no origin (mobile apps, curl, Postman, etc.)
+      if (!origin) return callback(null, true);
+      
       if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
+        callback(null, true);
+      } else {
+        console.log(`CORS blocked origin: ${origin}`);
+        callback(new Error(`CORS not allowed for origin: ${origin}`));
       }
-
-      // Allow any localhost:* for dev (optional)
-      if (/^http:\/\/localhost:\d+$/.test(origin)) {
-        return callback(null, true);
-      }
-
-      console.warn("❌ Blocked CORS for origin:", origin);
-      return callback(new Error("CORS not allowed"));
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "filtercriteria"],
+    allowedHeaders: [
+      "Content-Type", 
+      "Authorization", 
+      "filtercriteria",
+      "X-Requested-With",
+      "Accept",
+      "Origin"
+    ],
     credentials: true,
   })
 );
 
-// ✅ Handle preflight requests
-app.options("*", cors());
+// ✅ Add body parser middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ✅ Handle preflight requests explicitly
+app.options("*", (req, res) => {
+  res.header("Access-Control-Allow-Origin", req.headers.origin || "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, filtercriteria, X-Requested-With, Accept, Origin");
+  res.header("Access-Control-Allow-Credentials", "true");
+  res.sendStatus(200);
+});
+
+// ✅ Add a simple health check endpoint
+app.get("/health", (req, res) => {
+  res.json({ status: "OK", timestamp: new Date().toISOString() });
+});
 
 app.get("/orders", async (req, res) => {
   try {
+    // Log the request origin for debugging
+    console.log(`Request from origin: ${req.headers.origin || 'No origin'}`);
+    console.log(`Request headers:`, req.headers);
+
     const query = `
       {
         orders(first: 10, sortKey: CREATED_AT, reverse: true) {
@@ -120,7 +139,18 @@ app.get("/orders", async (req, res) => {
 
     const data = await response.json();
 
-    console.log(JSON.stringify(data, null, 2), 'jsobn');
+    // Check if Shopify returned an error
+    if (data.errors) {
+      console.error("Shopify GraphQL errors:", data.errors);
+      return res.status(400).json({ error: "Shopify API error", details: data.errors });
+    }
+
+    if (!data.data || !data.data.orders) {
+      console.error("Unexpected Shopify response structure:", data);
+      return res.status(500).json({ error: "Unexpected response from Shopify API" });
+    }
+
+    console.log(`Fetched ${data.data.orders.edges.length} orders from Shopify`);
 
     // Transform Shopify order → your schema
     const transformed = data.data.orders.edges.map(({ node }, idx) => ({
@@ -128,7 +158,7 @@ app.get("/orders", async (req, res) => {
       billing_addressln2: node.billingAddress?.address2 || null,
       billing_city: node.billingAddress?.city || "",
       billing_country: node.billingAddress?.country || "",
-      billing_country_code: "", // Shopify doesn’t return directly, you may need mapping
+      billing_country_code: "", // Shopify doesn't return directly, you may need mapping
       billing_country_code_id: "",
       billing_customer_name: `${node.customer?.firstName || ""} ${node.customer?.lastName || ""}`.trim(),
       billing_email: node.customer?.email || "",
@@ -169,9 +199,9 @@ app.get("/orders", async (req, res) => {
       dispatch_actual_date: null,
       dispatch_expected_date: null,
       isactive: true,
-      orderdate: new Date().toISOString().split("T")[0],
+      orderdate: new Date(node.createdAt).toISOString().split("T")[0],
       orderdate_formatted: null,
-      orderdate_utc: new Date().toISOString(),
+      orderdate_utc: new Date(node.createdAt).toISOString(),
       out_for_delivery_actual_date: null,
       pickup_actual_date: null,
       pickup_addressln: "",
@@ -222,16 +252,17 @@ app.get("/orders", async (req, res) => {
           notes: "",
           qc_passed: true,
         },
-        product_sku: li.node.sku,
+        product_sku: li.node.sku || "",
         productshortname: li.node.title,
         quantity: li.node.quantity,
         taxRate: 0,
-        unitPrice: parseFloat(li.node.originalUnitPriceSet.shopMoney.amount),
+        unitPrice: parseFloat(li.node.originalUnitPriceSet?.shopMoney?.amount || 0),
       })),
 
+      // Use actual Shopify order ID and name instead of index
       seller_email: "contact@auroratech.in",
-      seller_orderid: idx + 1,
-      seller_ordernumber: `ORD-${idx + 1}`,
+      seller_orderid: node.id,
+      seller_ordernumber: node.name,
       seller_reg_id: 2,
       sellername: "Aurora Tech",
 
@@ -254,11 +285,26 @@ app.get("/orders", async (req, res) => {
 
     res.json(transformed);
   } catch (err) {
-    console.error(err);
-    res.status(500).send("Error fetching orders");
+    console.error("Error fetching orders:", err);
+    res.status(500).json({ 
+      error: "Error fetching orders", 
+      message: err.message,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
   }
 });
 
-app.listen(port, () => {
-  console.log(`🚀 Server running at http://localhost:${port}`);
+// ✅ Error handling middleware
+app.use((err, req, res, next) => {
+  console.error("Global error handler:", err);
+  res.status(500).json({ 
+    error: "Internal server error",
+    message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
+  });
+});
+
+app.listen(port, '0.0.0.0', () => {
+  console.log(`🚀 Server running at http://0.0.0.0:${port}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Shopify Shop: ${process.env.SHOPIFY_SHOP || 'Not configured'}`);
 });
