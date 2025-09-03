@@ -9,15 +9,31 @@ dotenv.config();
 const app = express();
 const port = 3000;
 
-// ✅ Enable CORS
+
+// ✅ Allow localhost:3000 frontend and production domain
+const allowedOrigins = [
+  "http://localhost:3000",   // Next.js dev
+  "http://127.0.0.1:3000",   // sometimes browser resolves this
+  "https://yourdomain.com",  // production domain
+];
+
 app.use(
   cors({
-    origin: "*", // allow all origins (you can restrict to specific domains later)
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("CORS not allowed"));
+      }
+    },
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "filtercriteria"],
-    credentials: true, // if you need cookies/credentials
+    credentials: true,
   })
 );
+
+// ✅ Handle preflight requests
+app.options("*", cors());
 
 app.get("/orders", async (req, res) => {
   try {
