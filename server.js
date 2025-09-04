@@ -144,7 +144,7 @@ app.get("/orders", async (req, res) => {
 
     const query = `
       {
-        orders(first: 100, sortKey: CREATED_AT, reverse: true) {
+        orders(first: 10, sortKey: CREATED_AT, reverse: true) {
           edges {
             node {
               id
