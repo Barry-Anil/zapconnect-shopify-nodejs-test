@@ -54,20 +54,78 @@ app.use((req, res, next) => {
   next();
 });
 
+// ✅ In-memory storage for processed orders (to avoid duplicates)
+let processedOrders = new Set();
+
+// ✅ Function to send order to ZapConnect API
+async function sendToZapConnect(orderData) {
+  try {
+    console.log(`Sending order ${orderData.seller_ordernumber} to ZapConnect API...`);
+    
+    const response = await fetch('https://apiseller.zapconnecthub.com/api/seller/add/order/detail/v3', {
+      method: 'POST',
+      headers: {
+        'x-api-key': 'ABCD@1234',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(orderData)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`ZapConnect API error for order ${orderData.seller_ordernumber}:`, {
+        status: response.status,
+        statusText: response.statusText,
+        body: errorText
+      });
+      return {
+        success: false,
+        error: `HTTP ${response.status}: ${response.statusText}`,
+        details: errorText
+      };
+    }
+
+    const result = await response.json();
+    console.log(`✅ Successfully sent order ${orderData.seller_ordernumber} to ZapConnect`);
+    return {
+      success: true,
+      data: result
+    };
+
+  } catch (error) {
+    console.error(`Error sending order ${orderData.seller_ordernumber} to ZapConnect:`, error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
 // ✅ Health check endpoint
 app.get("/health", (req, res) => {
   res.json({ 
     status: "OK", 
     timestamp: new Date().toISOString(),
-    env: process.env.NODE_ENV || 'development'
+    env: process.env.NODE_ENV || 'development',
+    processedOrdersCount: processedOrders.size
   });
 });
 
 // ✅ Root endpoint
 app.get("/", (req, res) => {
   res.json({ 
-    message: "Shopify Orders API", 
-    endpoints: ["/health", "/orders"],
+    message: "Shopify Orders API with ZapConnect Integration", 
+    endpoints: ["/health", "/orders", "/clear-cache"],
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ✅ Clear processed orders cache (useful for testing)
+app.post("/clear-cache", (req, res) => {
+  processedOrders.clear();
+  console.log("Processed orders cache cleared");
+  res.json({ 
+    message: "Cache cleared successfully",
     timestamp: new Date().toISOString()
   });
 });
@@ -86,7 +144,7 @@ app.get("/orders", async (req, res) => {
 
     const query = `
       {
-        orders(first: 10, sortKey: CREATED_AT, reverse: true) {
+        orders(first: 100, sortKey: CREATED_AT, reverse: true) {
           edges {
             node {
               id
@@ -326,11 +384,51 @@ app.get("/orders", async (req, res) => {
       };
     });
 
+    // ✅ Process new orders and send to ZapConnect
+    const newOrders = [];
+    const zapConnectResults = [];
+
+    for (const order of transformedOrders) {
+      const orderKey = order.seller_orderid; // Using Shopify order ID as unique key
+      
+      if (!processedOrders.has(orderKey)) {
+        console.log(`🆕 New order detected: ${order.seller_ordernumber} (ID: ${orderKey})`);
+        newOrders.push(order);
+        
+        // Send to ZapConnect API
+        const zapResult = await sendToZapConnect(order);
+        zapConnectResults.push({
+          order_id: order.seller_orderid,
+          order_number: order.seller_ordernumber,
+          zapconnect_result: zapResult
+        });
+        
+        // Mark as processed if successfully sent
+        if (zapResult.success) {
+          processedOrders.add(orderKey);
+        }
+      } else {
+        console.log(`✅ Order already processed: ${order.seller_ordernumber}`);
+      }
+    }
+
+    console.log(`📊 Processing summary: ${newOrders.length} new orders, ${transformedOrders.length - newOrders.length} already processed`);
+
     // Set CORS headers explicitly
     res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
     res.header('Access-Control-Allow-Credentials', 'true');
     
-    res.json(transformedOrders);
+    // Return response with processing information
+    res.json({
+      orders: transformedOrders,
+      processing_summary: {
+        total_orders: transformedOrders.length,
+        new_orders: newOrders.length,
+        already_processed: transformedOrders.length - newOrders.length,
+        zapconnect_results: zapConnectResults
+      },
+      timestamp: new Date().toISOString()
+    });
 
   } catch (error) {
     console.error("Error in /orders endpoint:", error);
@@ -368,6 +466,7 @@ const server = app.listen(port, '0.0.0.0', () => {
   console.log(`🚀 Server running at http://0.0.0.0:${port}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`Shopify Shop: ${process.env.SHOPIFY_SHOP || 'Not configured'}`);
+  console.log(`ZapConnect Integration: Enabled`);
   console.log(`Time: ${new Date().toISOString()}`);
 });
 
