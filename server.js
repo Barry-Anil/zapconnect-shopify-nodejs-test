@@ -360,6 +360,7 @@ app.get("/orders", async (req, res) => {
 
         // Seller information
         seller_email: "contact@auroratech.in",
+        seller_email_x: "contact@auroratech.in",
         seller_orderid: node.id,
         seller_ordernumber: node.name,
         seller_reg_id: 2,
