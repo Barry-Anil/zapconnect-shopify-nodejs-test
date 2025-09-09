@@ -1,8 +1,9 @@
 import express from "express";
-import dotenv from "dotenv";
+// import dotenv from "dotenv";
 import cors from "cors";
+import pool from "./db/index.js";
 
-dotenv.config();
+// dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 4000;
@@ -12,16 +13,16 @@ const corsOptions = {
   origin: function (origin, callback) {
     // Allow requests with no origin (mobile apps, curl, Postman, etc.)
     if (!origin) return callback(null, true);
-    
+
     const allowedOrigins = [
-      "http://localhost:3000",   
+      "http://localhost:3000",
       "http://127.0.0.1:3000",
       "http://localhost:3001",
       "http://127.0.0.1:3001",
       "https://yourdomain.com",
       "https://apinode.zapconnecthub.com"
     ];
-    
+
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
@@ -32,8 +33,8 @@ const corsOptions = {
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: [
-    'Content-Type', 
-    'Authorization', 
+    'Content-Type',
+    'Authorization',
     'filtercriteria',
     'X-Requested-With',
     'Accept',
@@ -61,7 +62,7 @@ let processedOrders = new Set();
 async function sendToZapConnect(orderData) {
   try {
     console.log(`Sending order ${orderData.seller_ordernumber} to ZapConnect API...`);
-    
+
     const response = await fetch('https://apiseller.zapconnecthub.com/api/seller/add/order/detail/v3', {
       method: 'POST',
       headers: {
@@ -101,20 +102,56 @@ async function sendToZapConnect(orderData) {
   }
 }
 
+
+async function getShopifyCredentialsByEmail(email="anilkumar.b@intelliconnectq.com") {
+  const query = `
+    SELECT shopify_api_key, shopify_api_secret, shopify_scopes,
+           shopify_shop, shopify_access_token
+    FROM shopify_store_key
+    WHERE email = $1
+    LIMIT 1
+  `;
+  const result = await pool.query(query, [email]);
+
+  if (result.rows.length === 0) {
+    throw new Error("No Shopify credentials found for this email");
+  }
+
+  return result.rows[0];
+}
+
 // ✅ Health check endpoint
 app.get("/health", (req, res) => {
-  res.json({ 
-    status: "OK", 
+  res.json({
+    status: "OK",
     timestamp: new Date().toISOString(),
     env: process.env.NODE_ENV || 'development',
     processedOrdersCount: processedOrders.size
   });
 });
 
+app.get("/db-health", async (req, res) => {
+  try {
+    const db = await pool.query('SELECT NOW() AS current_time');
+    res.json({
+      status: "DB OK",
+      db_time: db.rows[0].current_time,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error("Database health check failed:", error);
+    res.status(500).json({
+      status: "DB ERROR",
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+})
+
 // ✅ Root endpoint
 app.get("/", (req, res) => {
-  res.json({ 
-    message: "Shopify Orders API with ZapConnect Integration", 
+  res.json({
+    message: "Shopify Orders API with ZapConnect Integration",
     endpoints: ["/health", "/orders", "/clear-cache"],
     timestamp: new Date().toISOString()
   });
@@ -124,7 +161,7 @@ app.get("/", (req, res) => {
 app.post("/clear-cache", (req, res) => {
   processedOrders.clear();
   console.log("Processed orders cache cleared");
-  res.json({ 
+  res.json({
     message: "Cache cleared successfully",
     timestamp: new Date().toISOString()
   });
@@ -132,15 +169,16 @@ app.post("/clear-cache", (req, res) => {
 
 app.get("/orders", async (req, res) => {
   try {
-    // Validate environment variables
-    if (!process.env.SHOPIFY_SHOP || !process.env.SHOPIFY_ACCESS_TOKEN) {
-      return res.status(500).json({ 
-        error: "Missing Shopify configuration",
-        details: "SHOPIFY_SHOP and SHOPIFY_ACCESS_TOKEN must be set"
-      });
+     const userEmail = req.headers["x-user-email"] || req.query.email;
+    if (!userEmail) {
+      return res.status(400).json({ error: "Missing user email" });
     }
 
-    console.log(`Fetching orders from: ${process.env.SHOPIFY_SHOP}`);
+    // ✅ fetch shopify creds from DB
+    const creds = await getShopifyCredentialsByEmail(userEmail);
+
+    console.log(`Fetching orders for ${userEmail} from: ${creds.shopify_shop}`);
+
 
     const query = `
       {
@@ -201,12 +239,12 @@ app.get("/orders", async (req, res) => {
     `;
 
     const shopifyResponse = await fetch(
-      `https://${process.env.SHOPIFY_SHOP}/admin/api/2025-01/graphql.json`,
+      `https://${creds.shopify_shop}/admin/api/2025-01/graphql.json`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Shopify-Access-Token": process.env.SHOPIFY_ACCESS_TOKEN,
+           "X-Shopify-Access-Token": creds.shopify_access_token,
         },
         body: JSON.stringify({ query }),
       }
@@ -221,15 +259,15 @@ app.get("/orders", async (req, res) => {
     // Check for GraphQL errors
     if (data.errors) {
       console.error("Shopify GraphQL errors:", data.errors);
-      return res.status(400).json({ 
-        error: "Shopify API error", 
-        details: data.errors 
+      return res.status(400).json({
+        error: "Shopify API error",
+        details: data.errors
       });
     }
 
     if (!data.data || !data.data.orders) {
       console.error("Unexpected Shopify response structure:", data);
-      return res.status(500).json({ 
+      return res.status(500).json({
         error: "Unexpected response from Shopify API",
         received: data
       });
@@ -240,7 +278,7 @@ app.get("/orders", async (req, res) => {
     // Transform Shopify orders to your schema
     const transformedOrders = data.data.orders.edges.map(({ node }, idx) => {
       const customerName = `${node.customer?.firstName || ""} ${node.customer?.lastName || ""}`.trim();
-      
+
       return {
         // Billing information
         billing_addressln: node.billingAddress?.address1 || "",
@@ -391,11 +429,11 @@ app.get("/orders", async (req, res) => {
 
     for (const order of transformedOrders) {
       const orderKey = order.seller_orderid; // Using Shopify order ID as unique key
-      
+
       if (!processedOrders.has(orderKey)) {
         console.log(`🆕 New order detected: ${order.seller_ordernumber} (ID: ${orderKey})`);
         newOrders.push(order);
-        
+
         // Send to ZapConnect API
         const zapResult = await sendToZapConnect(order);
         zapConnectResults.push({
@@ -403,7 +441,7 @@ app.get("/orders", async (req, res) => {
           order_number: order.seller_ordernumber,
           zapconnect_result: zapResult
         });
-        
+
         // Mark as processed if successfully sent
         if (zapResult.success) {
           processedOrders.add(orderKey);
@@ -418,7 +456,7 @@ app.get("/orders", async (req, res) => {
     // Set CORS headers explicitly
     res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
     res.header('Access-Control-Allow-Credentials', 'true');
-    
+
     // Return response with processing information
     res.json({
       orders: transformedOrders,
@@ -433,8 +471,8 @@ app.get("/orders", async (req, res) => {
 
   } catch (error) {
     console.error("Error in /orders endpoint:", error);
-    
-    res.status(500).json({ 
+
+    res.status(500).json({
       error: "Internal server error",
       message: error.message,
       stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
@@ -443,9 +481,17 @@ app.get("/orders", async (req, res) => {
   }
 });
 
+const server = app.listen(port, '0.0.0.0', () => {
+  console.log(`🚀 Server running at http://0.0.0.0:${port}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Database: Connected`);
+  console.log(`ZapConnect Integration: Enabled`);
+  console.log(`Time: ${new Date().toISOString()}`);
+});
+
 // ✅ 404 handler
 app.use((req, res) => {
-  res.status(404).json({ 
+  res.status(404).json({
     error: "Endpoint not found",
     path: req.path,
     method: req.method
@@ -455,21 +501,13 @@ app.use((req, res) => {
 // ✅ Global error handler
 app.use((error, req, res, next) => {
   console.error("Global error handler:", error);
-  res.status(500).json({ 
+  res.status(500).json({
     error: "Internal server error",
     message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong',
     timestamp: new Date().toISOString()
   });
 });
 
-// Start server
-const server = app.listen(port, '0.0.0.0', () => {
-  console.log(`🚀 Server running at http://0.0.0.0:${port}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`Shopify Shop: ${process.env.SHOPIFY_SHOP || 'Not configured'}`);
-  console.log(`ZapConnect Integration: Enabled`);
-  console.log(`Time: ${new Date().toISOString()}`);
-});
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
