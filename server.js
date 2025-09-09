@@ -20,7 +20,8 @@ const corsOptions = {
       "http://localhost:3001",
       "http://127.0.0.1:3001",
       "https://yourdomain.com",
-      "https://apinode.zapconnecthub.com"
+      "https://apinode.zapconnecthub.com",
+      "https://zapconnect-shopify-nodejs-test.onrender.com"
     ];
 
     if (allowedOrigins.indexOf(origin) !== -1) {
